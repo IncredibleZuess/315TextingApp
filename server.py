@@ -6,8 +6,8 @@ import json
 HOST = '0.0.0.0'
 PORT = 5000
 
-clients = {}      # username → socket
-groups  = {}      # groupname → set of usernames
+clients = {}    # username → socket
+groups  = {}    # groupname → set of usernames
 lock    = threading.Lock()
 
 def broadcast(msg_obj, targets):
@@ -16,18 +16,18 @@ def broadcast(msg_obj, targets):
         for user in list(targets):
             sock = clients.get(user)
             if sock:
-                try:
-                    sock.sendall(payload)
-                except:
-                    pass
+                try: sock.sendall(payload)
+                except: pass
 
 def broadcast_user_list():
-    msg = {'type': 'user_list', 'users': list(clients.keys())}
-    broadcast(msg, clients.keys())
+    broadcast({'type':'user_list',
+               'users': list(clients.keys())},
+              clients.keys())
 
 def broadcast_group_list():
-    msg = {'type': 'group_list', 'groups': list(groups.keys())}
-    broadcast(msg, clients.keys())
+    broadcast({'type':'group_list',
+               'groups': list(groups.keys())},
+              clients.keys())
 
 def handle_client(conn):
     buf = ''
@@ -44,56 +44,73 @@ def handle_client(conn):
                 mtype = msg.get('type')
 
                 if mtype == 'register':
-                    username = msg.get('username')
+                    username = msg['username']
                     with lock:
                         clients[username] = conn
                     broadcast_user_list()
                     broadcast_group_list()
 
                 elif mtype == 'join':
-                    grp = msg.get('group')
+                    grp = msg['group']
                     with lock:
-                        groups.setdefault(grp, set()).add(username)
+                        members = groups.setdefault(grp, set())
+                        members.add(username)
+                    # everyone in the group (including new joiner) sees this:
+                    broadcast({'type':'system',
+                               'text':f"{username} has joined #{grp}"},
+                              members)
                     broadcast_group_list()
 
                 elif mtype == 'leave':
-                    grp = msg.get('group')
+                    grp = msg['group']
                     with lock:
-                        if grp in groups:
-                            groups[grp].discard(username)
-                            if not groups[grp]:
-                                del groups[grp]
+                        members = groups.get(grp, set())
+                        before = set(members)
+                        # remove the user
+                        members.discard(username)
+                        # if now empty, delete the group
+                        if not members:
+                            del groups[grp]
+                    # notify both remaining members and the leaver
+                    notify = before | {username}
+                    broadcast({'type':'system',
+                               'text':f"{username} has left #{grp}"},
+                              notify)
                     broadcast_group_list()
 
                 elif mtype == 'msg':
-                    to = msg.get('to')
+                    to = msg['to']
+                    text = msg.get('text')
                     if to.startswith('#'):
-                        targets = groups.get(to[1:], set())
+                        grp = to[1:]
+                        with lock:
+                            members = groups.get(grp, set())
+                        # block if sender not in group
+                        if username not in members:
+                            continue
+                        targets = members
                     else:
                         targets = {to}
-                    msg_obj = {
-                        'type': 'msg',
-                        'from': username,
-                        'to': to,
-                        'text': msg.get('text')
-                    }
-                    broadcast(msg_obj, targets)
+                    broadcast({'type':'msg',
+                               'from': username,
+                               'to': to,
+                               'text': text},
+                              targets)
 
     finally:
         removed = False
         with lock:
             if username:
                 clients.pop(username, None)
+                # remove from all groups
                 for grp in list(groups):
                     groups[grp].discard(username)
                     if not groups[grp]:
                         del groups[grp]
                 removed = True
-
         if removed:
             broadcast_user_list()
             broadcast_group_list()
-
         conn.close()
 
 def main():
@@ -103,7 +120,8 @@ def main():
     print(f"Server listening on {HOST}:{PORT}")
     while True:
         conn, _ = sock.accept()
-        threading.Thread(target=handle_client, args=(conn,), daemon=True).start()
+        threading.Thread(target=handle_client,
+                         args=(conn,), daemon=True).start()
 
 if __name__ == '__main__':
     main()
