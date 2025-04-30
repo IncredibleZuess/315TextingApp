@@ -1,0 +1,6 @@
+# Python and IDE artifacts to ignore for github
+__pycache__/
+*.py[cod]
+venv/
+.vscode/
+.DS_Store
