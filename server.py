@@ -18,6 +18,13 @@ def broadcast(msg_obj, targets):
                 try: sock.sendall(payload)
                 except: pass
 
+def broadcast_user_list():
+    # Build the list of usernames
+    user_list = list(clients.keys())
+    msg = {'type':'user_list', 'users': user_list}
+    # Send to everyone currently connected
+    broadcast(msg, clients.keys())
+
 def handle_client(conn):
     buf = ''
     username = None
@@ -32,6 +39,7 @@ def handle_client(conn):
                 if msg['type']=='register':
                     username = msg['username']
                     with lock: clients[username]=conn
+                    broadcast_user_list()
                 elif msg['type']=='join':
                     grp = msg['group']
                     with lock: groups.setdefault(grp,set()).add(username)
@@ -48,6 +56,7 @@ def handle_client(conn):
             if username:
                 clients.pop(username,None)
                 for g in groups.values(): g.discard(username)
+                broadcast_user_list()
         conn.close()
 
 def main():
