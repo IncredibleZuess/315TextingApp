@@ -30,6 +30,7 @@ def broadcast_group_list():
               clients.keys())
 
 def handle_client(conn):
+    
     buf = ''
     username = None
     try:
@@ -42,16 +43,26 @@ def handle_client(conn):
                 line, buf = buf.split('\n', 1)
                 msg = json.loads(line)
                 mtype = msg.get('type')
-
                 if mtype == 'register':
-                    username = msg['username']
+                    username = msg['username'] 
                     with lock:
                         clients[username] = conn
+                        grp = "Global" # Create a default group for all users and let them join it on initial connection
+                        members = groups.setdefault(grp, set())
+                        members.add(username)
+                    broadcast({'type':'system',
+                               'text':f"{username} has joined the chat"},
+                              members) # Notify users that a new user has joined
                     broadcast_user_list()
                     broadcast_group_list()
 
                 elif mtype == 'join':
                     grp = msg['group']
+                    # If a user has joined a group, they cannot join it again
+                    if username in groups[grp]: #TODO DIE CODE ERROR. Ek dink die dictionary key exist nie voor ons hom check nie so ons moet hom eers add voor ons kan check of die user nie in die groep is nie
+                        broadcast({'type':'system',"text":"You have already joined this group"},
+                                  {username})
+                        break
                     with lock:
                         members = groups.setdefault(grp, set())
                         members.add(username)
@@ -63,11 +74,18 @@ def handle_client(conn):
 
                 elif mtype == 'leave':
                     grp = msg['group']
+                    if grp == "Global":
+                            #Cannot leave the global group
+                            broadcast({'type':'system',
+                                       'text':"SORRY cannot leave global group"},
+                                      {username})
+                            break
                     with lock:
                         members = groups.get(grp, set())
                         before = set(members)
                         # remove the user
                         members.discard(username)
+                        
                         # if now empty, delete the group
                         if not members:
                             del groups[grp]
@@ -96,7 +114,12 @@ def handle_client(conn):
                                'to': to,
                                'text': text},
                               targets)
-
+                    
+    except ConnectionResetError as error:
+        print(f"error: {error}")
+        # client disconnected without sending a message but we handle this anyways
+        print(f"Client {username} disconnected")
+        pass
     finally:
         removed = False
         with lock:

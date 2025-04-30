@@ -107,11 +107,13 @@ class ChatClient:
         if not self.username:
             master.destroy()
             return
-
+        
+        
         self.sock = socket.socket()
         self.sock.connect((SERVER_HOST, SERVER_PORT))
         self._send({'type':'register', 'username':self.username})
         threading.Thread(target=self.listen_server, daemon=True).start()
+        
 
     def _send(self, msg):
         self.sock.sendall((json.dumps(msg) + '\n').encode())
@@ -153,6 +155,7 @@ class ChatClient:
     def _update_recipients(self):
         opts = [f"@{u}" for u in self.latest_users] + [f"#{g}" for g in self.latest_groups]
         self.recipient_cb['values'] = opts
+        self.recipient_cb.set('#Global')
         if self.to_var.get() not in opts:
             self.to_var.set('')
 
