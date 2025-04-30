@@ -1,4 +1,3 @@
-# server.py
 import socket
 import threading
 import json
@@ -12,23 +11,22 @@ lock    = threading.Lock()
 
 def broadcast(msg_obj, targets):
     payload = (json.dumps(msg_obj) + '\n').encode()
+    # dont keep lock, just a snapshot of the sockets
     with lock:
-        for user in list(targets):
-            sock = clients.get(user)
-            if sock:
-                try:
-                    sock.sendall(payload)
-                except:
-                    pass
+        socks = [clients[user] for user in list(targets) if user in clients]
+    # send without holding the lock
+    for sock in socks:
+        try:
+            sock.sendall(payload)
+        except:
+            pass
 
 def broadcast_user_list():
-    broadcast({'type':'user_list',
-               'users': list(clients.keys())},
+    broadcast({'type':'user_list', 'users': list(clients.keys())},
               clients.keys())
 
 def broadcast_group_list():
-    broadcast({'type':'group_list',
-               'groups': list(groups.keys())},
+    broadcast({'type':'group_list', 'groups': list(groups.keys())},
               clients.keys())
 
 def handle_client(conn):
@@ -36,20 +34,33 @@ def handle_client(conn):
     username = None
     try:
         while True:
-            data = conn.recv(1024).decode()
+            try:
+                data = conn.recv(1024).decode()
+            except ConnectionResetError:
+                # client closed without warning
+                break
             if not data:
                 break
+
             buf += data
             while '\n' in buf:
                 line, buf = buf.split('\n', 1)
-                msg = json.loads(line)
+                msg   = json.loads(line)
                 mtype = msg.get('type')
 
                 if mtype == 'register':
-                    username = msg['username']
+                    username = msg.get('username')
                     with lock:
+                        # prevent duplicate usernames
+                        if username in clients:
+                            conn.sendall((json.dumps({
+                                'type':'system',
+                                'text':'Username already in use—please choose another.'
+                            }) + '\n').encode())
+                            conn.close()
+                            return
                         clients[username] = conn
-                        # auto-join the default Global group
+                        # auto-join default "Global" group
                         members = groups.setdefault("Global", set())
                         members.add(username)
                     broadcast({'type':'system',
@@ -59,54 +70,43 @@ def handle_client(conn):
                     broadcast_group_list()
 
                 elif mtype == 'join':
-                    grp = msg['group']
-                    # safely get or create the group
+                    grp = msg.get('group')
                     with lock:
+                        existed = grp in groups
                         members = groups.setdefault(grp, set())
-                        # if statement tot by die broadcast_group call sal die key error fix
+                        # prevent duplicate joins
                         if username in members:
-                            # already a member—notify only this user (private)
-                            try:
-                                conn.sendall(
-                                  (json.dumps({
-                                     'type':'system',
-                                     'text':'You have already joined this group'
-                                   }) + '\n').encode()
-                                )
-                            except:
-                                pass
-                            continue # Break vervang met continue anders kan die user niks anders op system doen as uit loop breek nie
+                            conn.sendall((json.dumps({
+                                'type':'system',
+                                'text':'You have already joined this group'
+                            }) + '\n').encode())
+                            continue
                         members.add(username)
-
-                    # announce to all members (including new joiner)
-                    broadcast({'type':'system',
-                               'text':f"{username} has joined #{grp}"},
-                              members)
+                    # announce creation vs join
+                    if not existed:
+                        broadcast({'type':'system',
+                                   'text':f"{username} has created and joined #{grp}"},
+                                  members)
+                    else:
+                        broadcast({'type':'system',
+                                   'text':f"{username} has joined #{grp}"},
+                                  members)
                     broadcast_group_list()
 
                 elif mtype == 'leave':
-                    grp = msg['group']
+                    grp = msg.get('group')
                     if grp == "Global":
-                        # cannot leave default group
-                        try:
-                            conn.sendall(
-                              (json.dumps({
-                                'type':'system',
-                                'text':'You cannot leave the Global group'
-                              }) + '\n').encode()
-                            )
-                        except:
-                            pass
+                        conn.sendall((json.dumps({
+                            'type':'system',
+                            'text':'You cannot leave the Global group'
+                        }) + '\n').encode())
                         continue
-
                     with lock:
+                        before = set(groups.get(grp, set()))
                         members = groups.get(grp, set())
-                        before = set(members)
                         members.discard(username)
-                        if not members:
+                        if not members and grp in groups:
                             del groups[grp]
-
-                    # notify both the leaver and remaining members
                     notify = before | {username}
                     broadcast({'type':'system',
                                'text':f"{username} has left #{grp}"},
@@ -114,13 +114,12 @@ def handle_client(conn):
                     broadcast_group_list()
 
                 elif mtype == 'msg':
-                    to = msg.get('to')
+                    to   = msg.get('to')
                     text = msg.get('text')
                     if to.startswith('#'):
                         grp = to[1:]
                         with lock:
                             members = groups.get(grp, set())
-                        # block if sender not a member
                         if username not in members:
                             continue
                         targets = members
@@ -133,7 +132,6 @@ def handle_client(conn):
                               targets)
 
     finally:
-        # clean up on disconnect
         removed = False
         with lock:
             if username:
@@ -155,8 +153,11 @@ def main():
     print(f"Server listening on {HOST}:{PORT}")
     while True:
         conn, _ = sock.accept()
-        threading.Thread(target=handle_client,
-                         args=(conn,), daemon=True).start()
+        threading.Thread(
+            target=handle_client,
+            args=(conn,),
+            daemon=True
+        ).start()
 
 if __name__ == '__main__':
     main()
