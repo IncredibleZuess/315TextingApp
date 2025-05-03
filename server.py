@@ -52,13 +52,15 @@ def handle_client(conn):
                     username = msg.get('username')
                     with lock:
                         # prevent duplicate usernames
+                        # Created a new type to handle this case
+                        # This should work :)
                         if username in clients:
                             conn.sendall((json.dumps({
-                                'type':'system',
-                                'text':'Username already in use—please choose another.'
+                                'type':'duplicate',
+                                'username':f'{username}'
                             }) + '\n').encode())
-                            conn.close()
-                            return
+                            #conn.close() Closes the connection a bit too early as we want to query again for the new username
+                            break
                         clients[username] = conn
                         # auto-join default "Global" group
                         members = groups.setdefault("Global", set())

@@ -144,6 +144,16 @@ class ChatClient:
                         self.group_listbox.insert('end', g)
                     self._update_recipients()
 
+                elif m == 'duplicate':
+                    #Make a new window to ask for a different username
+                    win = tk.Tk()
+                    win.withdraw()  # Hide the root window
+                    self.username = simpledialog.askstring("Username Taken", "Please choose a different username:", parent=win)
+                    self._send({'type':'register', 'username':self.username})
+                    win.destroy()
+                        
+
+
                 elif m == 'system':
                     self._append_system(msg['text'])
 
